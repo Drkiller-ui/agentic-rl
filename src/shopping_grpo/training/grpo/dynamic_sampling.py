@@ -32,6 +32,8 @@ def aggregate_shopping_metrics(shopping_infos: Sequence[object]) -> dict[str, fl
     steps = []
     done = []
     max_steps = []
+    overlong = []
+    repeat_loop = []
     infrastructure_invalid = []
     reward_unverifiable = []
     terminal_utilities = []
@@ -57,6 +59,8 @@ def aggregate_shopping_metrics(shopping_infos: Sequence[object]) -> dict[str, fl
         steps.append(float(info.get("steps", 0)))
         done.append(float(info.get("done") is True))
         max_steps.append(float(info.get("termination_reason") == "max_steps"))
+        overlong.append(float(bool(info.get("overlong"))))
+        repeat_loop.append(float(info.get("reward_type") == "repeat_loop"))
         infrastructure_invalid.append(float(bool(info.get("infrastructure_invalid"))))
         reward_unverifiable.append(float(bool(info.get("reward_unverifiable"))))
         terminal_utilities.append(
@@ -113,6 +117,8 @@ def aggregate_shopping_metrics(shopping_infos: Sequence[object]) -> dict[str, fl
         "trajectory/average_steps": mean(steps),
         "trajectory/done_rate": mean(done),
         "trajectory/max_steps_rate": mean(max_steps),
+        "trajectory/overlong_rate": mean(overlong),
+        "trajectory/repeat_loop_rate": mean(repeat_loop),
         "trajectory/repeat_action_rate": mean(rewards["repeat_action_rate"]),
         "trajectory/infrastructure_invalid_rate": mean(infrastructure_invalid),
         "trajectory/reward_unverifiable_rate": mean(reward_unverifiable),
@@ -155,6 +161,8 @@ def extract_shopping_group_signals(
             reasons.append("infrastructure_invalid")
         if bool(info.get("reward_unverifiable")):
             reasons.append("reward_unverifiable")
+        if bool(info.get("overlong")):
+            reasons.append("overlong")
         reward_sampling_invalid = bool(
             info["reward"].get("sampling_invalid", False)
         )

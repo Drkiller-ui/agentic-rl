@@ -306,6 +306,39 @@ def reward_breakdown(state: dict) -> dict[str, float | bool]:
     }
 
 
+def apply_reward_length_shaping(
+    reward: Mapping,
+    state: Mapping,
+    *,
+    enabled: bool,
+    soft_threshold: int = 20,
+    penalty_per_step: float = 0.01,
+    max_penalty: float = 0.15,
+) -> dict:
+    """Apply optional soft length cost and invalidate hard max-step trajectories."""
+    shaped = dict(reward)
+    if not enabled:
+        return shaped
+    threshold = int(soft_threshold)
+    per_step = float(penalty_per_step)
+    cap = float(max_penalty)
+    if threshold < 1 or per_step < 0 or cap < 0:
+        raise ValueError("length shaping threshold must be positive and penalties non-negative")
+
+    steps = len(state.get("steps") or [])
+    penalty = min(max(steps - threshold, 0) * per_step, cap)
+    shaped["penalty_overlong"] = float(shaped.get("penalty_overlong", 0.0)) + penalty
+    shaped["total"] = float(shaped["total"]) - penalty
+    shaped["terminal_utility"] = float(shaped["terminal_utility"]) - penalty
+    shaped["overlong"] = bool(
+        state.get("termination_reason") == "max_steps"
+        or steps >= int(state.get("max_steps", steps + 1))
+    )
+    if shaped["overlong"]:
+        shaped["sampling_invalid"] = True
+    return shaped
+
+
 def terminal_reward(state: dict, mode: str = "native") -> float:
     """按实验模式返回原生或约束感知奖励。"""
     if mode == "constraint_aware":

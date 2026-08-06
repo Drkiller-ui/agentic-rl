@@ -284,6 +284,16 @@ def validate_swanlab_tracking(config):
     )
 
 
+def ppo_gradient_accumulation_steps(mini_batch_size: int, micro_batch_size: int) -> int:
+    mini = int(mini_batch_size)
+    micro = int(micro_batch_size)
+    if mini <= 0 or micro <= 0:
+        raise ValueError("PPO mini and micro batch sizes must be positive")
+    if mini % micro:
+        raise ValueError("PPO mini batch size must be divisible by micro batch size")
+    return mini // micro
+
+
 def validate_training_memory_budget(config):
     prompt_length = int(config.data.max_prompt_length)
     response_length = int(config.data.max_response_length)
@@ -320,10 +330,17 @@ def validate_training_memory_budget(config):
             )
     if bool(actor.use_dynamic_bsz):
         raise SystemExit(
-            "actor.use_dynamic_bsz must be false so ppo_micro_batch_size_per_gpu=1 is enforced"
+            "actor.use_dynamic_bsz must be false so configured PPO micro batches are enforced"
         )
-    if int(actor.ppo_micro_batch_size_per_gpu) != 1:
-        raise SystemExit("actor.ppo_micro_batch_size_per_gpu must equal 1")
+    actor_micro_batch_size = int(actor.ppo_micro_batch_size_per_gpu)
+    actor_mini_batch_size = int(actor.ppo_mini_batch_size)
+    try:
+        gradient_accumulation_steps = ppo_gradient_accumulation_steps(
+            actor_mini_batch_size,
+            actor_micro_batch_size,
+        )
+    except ValueError as exc:
+        raise SystemExit(str(exc)) from exc
     if bool(rollout.log_prob_use_dynamic_bsz):
         raise SystemExit(
             "rollout.log_prob_use_dynamic_bsz must be false so "
@@ -346,7 +363,9 @@ def validate_training_memory_budget(config):
                 "max_prompt_length": prompt_length,
                 "max_response_length": response_length,
                 "max_sequence_length": total_length,
-                "actor_micro_batch_size_per_gpu": 1,
+                "actor_mini_batch_size": actor_mini_batch_size,
+                "actor_micro_batch_size_per_gpu": actor_micro_batch_size,
+                "actor_gradient_accumulation_steps": gradient_accumulation_steps,
                 "actor_dynamic_batch": False,
                 "rollout_log_prob_micro_batch_size_per_gpu": 1,
                 "rollout_log_prob_dynamic_batch": False,

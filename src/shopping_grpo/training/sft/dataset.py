@@ -160,6 +160,31 @@ def load_supervised_examples(path, tokenizer, max_length=8192, chat_template=Non
     return examples, stats
 
 
+def select_training_examples(examples, *, count=None, ratio=None, seed=42):
+    """Deterministically select a training-only subset without touching validation."""
+    if count is not None and ratio is not None:
+        raise ValueError("count and ratio are mutually exclusive")
+    if count is not None and int(count) <= 0:
+        raise ValueError("count must be positive")
+    if ratio is not None and not 0 < float(ratio) <= 1:
+        raise ValueError("ratio must be in (0, 1]")
+    if count is None and ratio is None:
+        return list(examples)
+
+    keyed = []
+    for example in examples:
+        identity = json.dumps(
+            [example.get("task_id"), example.get("trajectory_id")],
+            ensure_ascii=False,
+            separators=(",", ":"),
+        )
+        digest = hashlib.sha256(f"{seed}:{identity}".encode()).hexdigest()
+        keyed.append((digest, example))
+    size = int(count) if count is not None else round(len(keyed) * float(ratio))
+    size = min(len(keyed), max(1, size))
+    return [example for _, example in sorted(keyed)[:size]]
+
+
 def split_rows_by_task(rows, validation_ratio=0.05, seed=42):
     """按 task_id 稳定划分 SFT 行，避免同题轨迹同时出现在训练和验证中。"""
     ratio = float(validation_ratio)

@@ -7,7 +7,12 @@ import time as _time
 from functools import partial
 from pathlib import Path
 
-from shopping_grpo.training.sft.dataset import load_supervised_examples
+from shopping_grpo.evaluation.artifacts import ArtifactError
+from shopping_grpo.evaluation.blind_guard import guard_blind_final
+from shopping_grpo.training.sft.dataset import (
+    load_supervised_examples,
+    select_training_examples,
+)
 
 DEFAULT_TARGET_MODULES = (
     "q_proj",
@@ -72,6 +77,9 @@ def parse_args():
     parser.add_argument("--logging-steps", type=int, default=5)
     parser.add_argument("--save-total-limit", type=int, default=2)
     parser.add_argument("--seed", type=int, default=42)
+    parser.add_argument("--train-count", type=int, default=None)
+    parser.add_argument("--train-ratio", type=float, default=None)
+    parser.add_argument("--subset-seed", type=int, default=42)
     parser.add_argument("--resume-from-checkpoint", default=None)
     parser.add_argument("--max-steps", type=int, default=-1, help="最大训练步数（-1=完整 epoch）；用于冒烟测试")
     parser.add_argument("--swanlab", action="store_true", help="启用 SwanLab 训练监控")
@@ -306,6 +314,13 @@ def main():
     args = parse_args()
     if args.max_length < 1 or args.epochs <= 0:
         raise SystemExit("--max-length 与 --epochs 必须为正数")
+    try:
+        guard_blind_final(
+            [args.train, *([args.validation] if args.validation else [])],
+            allowed=False,
+        )
+    except ArtifactError as exc:
+        raise SystemExit(str(exc)) from exc
     _validate_optional_training_dependencies(args)
     (
         torch,
@@ -377,6 +392,16 @@ def main():
         chat_template=chat_template,
         max_length=args.max_length,
     )
+    try:
+        train_examples = select_training_examples(
+            train_examples,
+            count=args.train_count,
+            ratio=args.train_ratio,
+            seed=args.subset_seed,
+        )
+    except ValueError as exc:
+        raise SystemExit(str(exc)) from exc
+    train_stats["selected"] = len(train_examples)
     print("train_data=", train_stats)
     if not train_examples:
         raise SystemExit("训练集没有可用样本；请检查 data/sft/ 中的 JSONL 格式")
