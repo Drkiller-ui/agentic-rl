@@ -251,6 +251,53 @@ bash scripts/baseline.sh
 
 开始训练前请停止模型服务，释放 GPU 显存。
 
+`scripts/baseline.sh` 只跑 **Reward v3 硬判定 + 行为指标**（四面板的 A+D 两块）。
+要复现作者在 `docs/evaluation.md` 里的完整四面板（Reward + Query Rubric + 五维轨迹 +
+确定性行为），还需要先恢复 git 历史里被教程化裁掉的 3 个 rubric 入口脚本，并按
+下述"完整四面板评估"分三段执行。
+
+#### 3a. 恢复历史 rubric 入口脚本
+
+`3d8a0a5 refactor: turn repository into beginner training tutorial` 这一笔
+主动删掉了 `scripts/export_evaluation_task_facts.py`、
+`scripts/build_trajectory_evaluation_artifacts.py`、
+`scripts/run_trajectory_evaluation_models.py`（详见 `git log scripts/`）。
+完整复现需要从 `0630e10` 之前把它们 checkout 回来：
+
+```bash
+git checkout 0630e10~1 -- \
+  scripts/export_evaluation_task_facts.py \
+  scripts/build_trajectory_evaluation_artifacts.py \
+  scripts/run_trajectory_evaluation_models.py
+```
+
+`model_client.py` 在 main 分支已经用 `deepseek-v4-flash` / `deepseek-v4-pro`
+（2026-07-28 之后 commit），不需要再手动改。
+
+#### 3b. 配置 OpenCode 端点
+
+rubric 脚本走 OpenAI-compatible 协议连 OpenCode（vLLM 评估走的是另一个端点）。
+在 server 端写到 `/etc/profile.d/opencode_llm.sh` 并 source：
+
+```bash
+export OPENAI_BASE_URL="https://api.opencode.com/v1"
+export OPENAI_API_KEY="sk-xxx"
+```
+
+#### 3c. 完整四面板评估（三段式）
+
+**关键设计**：Rubric 只需要为 200 个 task 生成一次，与 Actor 轨迹无关，三段必须
+解耦——任何 Actor（baseline/sft/grpo）共用同一份 `shared/rubrics.jsonl`。
+
+| 阶段 | 命令 | 产物 | 频次 |
+|---|---|---|---|
+| 一、Rubric 冻结 | 见下方 6a | `shared/rubrics.jsonl` | **只 1 次** |
+| 二、Actor 评估 | `bash scripts/evaluate.sh {baseline\|sft\|grpo}` | `outputs/evaluation/<label>/trajectories.jsonl` + `summary.json` | 每个 Actor 1 次 |
+| 三、Pro Judge + 聚合 | 见下方 6b | `outputs/evaluation/<label>/evaluations.jsonl` + `summary.json`（四面板）| 每个 Actor 1 次 |
+
+不要把这三段塞回 `evaluate.sh`——会让 baseline/sft/grpo 各自重跑一次 V4 Flash 冻结
+（600 次 LLM 调用），违反作者"rubric 冻结一次"的明确设计。
+
 ### 4. 训练并评估 SFT
 
 ```bash
@@ -291,6 +338,51 @@ bash scripts/evaluate.sh grpo
 ```
 
 Checkpoint、Rollout 和日志统一写入 Git 忽略的 `outputs/`。
+
+### 6. 完整四面板评估
+
+`scripts/evaluate.sh` 只产出 A+D 两块面板；要拿到 Query Rubric（B）和 Pro Judge
+五维（C），按下面三步跑。中间两步已经抽成薄脚本，跟 `evaluate.sh` 风格保持一致。
+
+> 前置：完成 §3a 恢复脚本、§3b 注入 OpenCode 端点、`.venv-shopsim` 存在
+> （`setup.sh` 已建）。所有 `shared/` 路径在仓库根目录，可用环境变量覆盖
+> （`SHARED_DIR=` `RUBRICS=` `PREPROCESSED=` `JUDGE_REQUESTS=` `JUDGMENTS=`）。
+
+#### 6a. 冻结 Rubric（V4 Flash，只跑 1 次，三个 Actor 共用）
+
+```bash
+bash scripts/freeze_rubrics.sh
+```
+
+封装 ① `export_evaluation_task_facts.py`（走 `.venv-shopsim`）+ ②
+`build_trajectory_evaluation_artifacts.py rubric-candidates`（不调 LLM）+ ③
+`run_trajectory_evaluation_models.py curate-rubrics`（V4 Flash）。
+产物 `shared/rubrics.jsonl` 含 200 个 Rubric bundle / 约 1,265 条约束；脚本自带
+hash 校验与 resume，中断后重跑会自动跳过已完成 task。
+
+#### 6b. Pro Judge + 四面板聚合（每个 Actor 跑 1 次）
+
+```bash
+LABEL=baseline   # 或 sft / grpo
+bash scripts/judge_actor.sh $LABEL
+```
+
+封装 ① `preprocess` + ② `judge-inputs`（rubric × actor_visible trajectory）+
+③ `judge`（V4 Pro）+ ④ `assemble`（拼出 A/B/C/D 四面板）。
+产物：`outputs/evaluation/<label>/{evaluations.jsonl, evaluation_summary.json}`。
+脚本会前置检查 `RUBRICS` 和 `trajectories.jsonl`，缺一个直接报错。
+
+#### 6c. 三 Actor 配对比较
+
+```bash
+.venv/bin/python scripts/build_trajectory_evaluation_artifacts.py compare \
+  --expected-tasks data/evaluation/tasks.jsonl \
+  --model-evaluations baseline=outputs/evaluation/baseline/evaluations.jsonl \
+  --model-evaluations sft=outputs/evaluation/sft/evaluations.jsonl \
+  --model-evaluations grpo=outputs/evaluation/grpo/evaluations.jsonl \
+  --output outputs/comparison/baseline_sft_grpo.json \
+  --force
+```
 
 ## Reward v3 简介
 
