@@ -280,7 +280,7 @@ rubric 脚本走 OpenAI-compatible 协议连 OpenCode（vLLM 评估走的是另�
 在 server 端写到 `/etc/profile.d/opencode_llm.sh` 并 source：
 
 ```bash
-export OPENAI_BASE_URL="https://api.opencode.com/v1"
+export OPENAI_BASE_URL="https://opencode.ai/zen/go/v1"
 export OPENAI_API_KEY="sk-xxx"
 ```
 

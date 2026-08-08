@@ -9,6 +9,11 @@
 #   ④ build_trajectory_evaluation_artifacts.py assemble   → outputs/evaluation/<label>/{evaluations.jsonl,evaluation_summary.json}
 set -euo pipefail
 
+# 非交互 bash 不读 ~/.bashrc；显式加载 OpenCode env
+if [[ -f /etc/profile.d/opencode_llm.sh ]]; then
+  source /etc/profile.d/opencode_llm.sh
+fi
+
 LABEL="${1:?usage: $0 <label>   (label = baseline | sft | grpo)}"
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 SHARED_DIR="${SHARED_DIR:-$ROOT/shared}"
@@ -44,25 +49,28 @@ mkdir -p "$SHARED_DIR/preprocessed" "$SHARED_DIR/judge_requests" "$SHARED_DIR/ju
 cd "$ROOT"
 
 echo "==> ① preprocess raw trajectories"
-exec "$MAIN_VENV/bin/python" scripts/build_trajectory_evaluation_artifacts.py preprocess \
+"$MAIN_VENV/bin/python" scripts/build_trajectory_evaluation_artifacts.py preprocess \
   --raw    "$TRAJECTORIES" \
   --output "$PREPROCESSED" \
+  --allow-blind-final \
   $USE_FORCE
 
 echo "==> ② build judge-inputs (rubric + actor_visible trajectory)"
-exec "$MAIN_VENV/bin/python" scripts/build_trajectory_evaluation_artifacts.py judge-inputs \
+"$MAIN_VENV/bin/python" scripts/build_trajectory_evaluation_artifacts.py judge-inputs \
   --preprocessed "$PREPROCESSED" \
   --rubrics      "$RUBRICS" \
   --output       "$JUDGE_REQUESTS" \
+  --allow-blind-final \
   $USE_FORCE
 
 echo "==> ③ judge (V4 Pro via OpenCode)"
-exec "$MAIN_VENV/bin/python" scripts/run_trajectory_evaluation_models.py judge \
+"$MAIN_VENV/bin/python" scripts/run_trajectory_evaluation_models.py judge \
   --requests "$JUDGE_REQUESTS" \
-  --output   "$JUDGMENTS"
+  --output   "$JUDGMENTS" \
+  --allow-blind-final
 
 echo "==> ④ assemble four-panel summary"
-exec "$MAIN_VENV/bin/python" scripts/build_trajectory_evaluation_artifacts.py assemble \
+"$MAIN_VENV/bin/python" scripts/build_trajectory_evaluation_artifacts.py assemble \
   --preprocessed    "$PREPROCESSED" \
   --rubrics         "$RUBRICS" \
   --judges          "$JUDGMENTS" \
@@ -70,4 +78,5 @@ exec "$MAIN_VENV/bin/python" scripts/build_trajectory_evaluation_artifacts.py as
   --actor           "$ACTOR_META" \
   --output          "$EVALUATIONS" \
   --summary         "$EVAL_SUMMARY" \
+  --allow-blind-final \
   $USE_FORCE
