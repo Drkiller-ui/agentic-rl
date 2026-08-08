@@ -60,7 +60,9 @@ def _validated_path(path: Path, description: str) -> Path:
     return resolved
 
 
-def build_command(args: argparse.Namespace) -> tuple[list[str], dict[str, str]]:
+def build_command(
+    args: argparse.Namespace,
+) -> tuple[list[str], dict[str, str], list[str], list[str]]:
     model = _validated_path(args.model, "model directory")
     if not model.is_dir() or not (model / "config.json").is_file():
         raise SystemExit(f"model directory is missing config.json: {model}")
@@ -126,12 +128,12 @@ def build_command(args: argparse.Namespace) -> tuple[list[str], dict[str, str]]:
         *overrides,
         *extra,
     ]
-    return command, environment
+    return command, environment, overrides, extra
 
 
 def main() -> None:
     args = parse_args()
-    command, environment = build_command(args)
+    command, environment, overrides, extra = build_command(args)
     audit = {
         "command": command,
         "model": environment["GRPO_MODEL_PATH"],
