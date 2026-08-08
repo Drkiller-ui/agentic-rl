@@ -34,9 +34,13 @@ def make_runtime_state(task_id: int, max_steps: int) -> dict:
         "terminate": False,
         "termination_reason": None,
         "consecutive_guard_rejections": 0,
+        "consecutive_repeat_actions": 0,
         "action_attempt_count": 0,
         "repeat_action_count": 0,
         "recent_action_signatures": [],
+        "is_fatal": False,
+        "fatal_step_index": None,
+        "fatal_reason": None,
         "terminal_result": {},
         "final_reward": 0.0,
         "reward_version": None,
@@ -105,8 +109,42 @@ def record_action_attempt(state: dict, tool_name: str, parameters: dict, observa
     state["action_attempt_count"] += 1
     if signature in recent:
         state["repeat_action_count"] += 1
+    # 连续三次相同 action 签名（工具+参数+observation 指纹）视为卡死循环。
+    if len(recent) >= 2 and recent[-1] == signature and recent[-2] == signature:
+        state["consecutive_repeat_actions"] += 1
+    else:
+        state["consecutive_repeat_actions"] = 0
     recent.append(signature)
     del recent[:-3]
+
+
+# 执行层卡死判定：这些信号意味着模型在无效循环中打转，后续生成没有可学习的
+# 结构。fatal 轨迹完整 reward 仍参与组内均值/方差统计，但 trainer 层把其
+# advantage/returns 单侧 clamp 到 >= 0，最坏情形退化为 hard mask（零梯度）。
+# 注意：max_steps / early_abstain / wrong_purchase 是"结果失败"而非"执行卡死"，
+# 保留负梯度，不纳入 fatal。
+FATAL_TERMINATION_REASONS = {
+    "too_many_guard_rejections": "consecutive_guard_rejections",
+    "repeat_loop": "repeat_loop",
+}
+CONSECUTIVE_REPEAT_FATAL_THRESHOLD = 3
+
+
+def finalize_fatal_detection(state: dict) -> None:
+    """轨迹结束时判定 is_fatal；幂等，已打标则跳过。"""
+    if bool(state.get("is_fatal")):
+        return
+    fatal_reason = FATAL_TERMINATION_REASONS.get(state.get("termination_reason"))
+    if (
+        fatal_reason is None
+        and state.get("consecutive_repeat_actions", 0)
+        >= CONSECUTIVE_REPEAT_FATAL_THRESHOLD
+    ):
+        fatal_reason = "consecutive_repeat_actions"
+    if fatal_reason is not None:
+        state["is_fatal"] = True
+        state["fatal_reason"] = fatal_reason
+        state["fatal_step_index"] = len(state.get("steps") or [])
 
 
 def validate_reward(raw_detail: object) -> dict:

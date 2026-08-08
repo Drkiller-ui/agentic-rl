@@ -18,6 +18,7 @@ from shopping_grpo.environment.projection import (
 from shopping_grpo.training.grpo.adapter.runtime import (
     apply_reward_length_shaping,
     current_runtime_state,
+    finalize_fatal_detection,
     record_observation_projection,
     reward_breakdown,
     task_id_from_kwargs,
@@ -265,6 +266,9 @@ class ShoppingToolAgentLoop(ToolAgentLoop):
                 state["error"] = "assistant_finished_without_environment_done"
                 state["termination_reason"] = state["error"]
                 state["terminate"] = True
+            # fatal-aware：结算前统一判定执行层卡死（连续 guard 拒绝 / 重复循环 /
+            # 连续重复动作），供 trainer 做 advantage 单侧 clamp。
+            finalize_fatal_detection(state)
             # 父类结束后统一从环境状态结算，避免把中途异常当作正常终局奖励。
             breakdown = apply_reward_length_shaping(
                 reward_breakdown(state),
@@ -279,6 +283,9 @@ class ShoppingToolAgentLoop(ToolAgentLoop):
                 if self.reward_mode == "constraint_aware"
                 else terminal_reward(state, mode=self.reward_mode)
             )
+            # 顶层 is_fatal 供 verl trainer 读 non_tensor_batch["is_fatal"]；
+            # 嵌套 shopping 里的三字段是完整诊断。
+            output.extra_fields["is_fatal"] = bool(state["is_fatal"])
             output.extra_fields["shopping"] = {
                 "task_id": task_id,
                 "steps": len(state["steps"]),
@@ -286,6 +293,9 @@ class ShoppingToolAgentLoop(ToolAgentLoop):
                 "termination_reason": state["termination_reason"],
                 "error": state["error"],
                 "infrastructure_invalid": bool(state["infrastructure_invalid"]),
+                "is_fatal": bool(state["is_fatal"]),
+                "fatal_step_index": state["fatal_step_index"],
+                "fatal_reason": state["fatal_reason"],
                 "action_attempts": int(state["action_attempt_count"]),
                 "repeat_actions": int(state["repeat_action_count"]),
                 "overlong": bool(breakdown.get("overlong", False)),
